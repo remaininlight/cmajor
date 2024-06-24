@@ -158,7 +158,7 @@ struct Patch
     EndpointDetailsList getInputEndpoints() const;
     EndpointDetailsList getOutputEndpoints() const;
 
-    choc::span<PatchParameterPtr> getParameterList() const;
+    std::vector<PatchParameterPtr> getParameterList() const;
     PatchParameterPtr findParameter (const EndpointID&) const;
 
     //==============================================================================
@@ -1339,7 +1339,7 @@ struct Patch::PatchRenderer  : public std::enable_shared_from_this<PatchRenderer
             return false;
 
         if (auto param = findParameter (endpointID))
-            return param->setValue (value, false, rampFrames, timeoutMilliseconds);
+            param->setValue (value, false, rampFrames, timeoutMilliseconds);
 
         if (! performer->postEventOrValue (endpointID, value, rampFrames > 0 ? (uint32_t) rampFrames : 0,
                                            timeoutMilliseconds))
@@ -1808,10 +1808,10 @@ inline bool Patch::preload (const PatchManifest& m)
     auto build = std::make_unique<Build> (*this, params, false, false);
     build->build ([] {});
     setNewRenderer (build->takeRenderer());
-    return renderer != nullptr && ! renderer->errors.hasErrors();
+return renderer != nullptr && ! renderer->errors.hasErrors();
 }
 
-inline bool Patch::loadPatch (const LoadParams& params, bool synchronous)
+inline bool Patch::loadPatch (const LoadParams& loadParams, bool synchronous)
 {
     // You must provide a function to create a patch worker context before building
     CMAJ_ASSERT (createContextForPatchWorker != nullptr);
@@ -1821,17 +1821,32 @@ inline bool Patch::loadPatch (const LoadParams& params, bool synchronous)
 
     fileChangeChecker.reset();
 
-    if (std::addressof (lastLoadParams) != std::addressof (params))
-        lastLoadParams = params;
+    if (std::addressof (lastLoadParams) != std::addressof (loadParams))
+        lastLoadParams = loadParams;
 
-    auto build = std::make_unique<Build> (*this, params, true, true);
+    auto build = std::make_unique<Build> (*this, loadParams, true, true);
 
-    setStatus ("Loading: " + params.manifest.manifestFile);
+    setStatus ("Loading: " + loadParams.manifest.manifestFile);
 
     if (synchronous)
     {
         build->build ([] {});
         setNewRenderer (build->takeRenderer());
+        auto paramList = getParameterList();
+        for (auto& param : paramList) {
+            
+            auto endpointID = cmaj::EndpointID::create (param->properties.endpointID);
+            auto loadParam = loadParams.parameterValues.find(param->properties.endpointID);
+            if (loadParam != loadParams.parameterValues.end())
+            {
+                auto value = choc::value::createFloat32(loadParam->second);
+
+                renderer->sendEventOrValueToPatch (*clientEventQueue, 
+                                                   endpointID, 
+                                                   value,
+                                                   0, 0);
+            }
+        }
         return isPlayable();
     }
 
@@ -2103,12 +2118,12 @@ inline EndpointDetailsList Patch::getOutputEndpoints() const
     return {};
 }
 
-inline choc::span<PatchParameterPtr> Patch::getParameterList() const
+inline std::vector<PatchParameterPtr> Patch::getParameterList() const
 {
     if (renderer != nullptr)
         return renderer->parameterList;
 
-    return {};
+    return std::vector<PatchParameterPtr>{};
 }
 
 inline PatchParameterPtr Patch::findParameter (const EndpointID& endpointID) const
